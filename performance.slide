@@ -1,0 +1,243 @@
+Go Performance
+How to optimize your Go applications
+11 Jul 2014
+
+Erik St. Martin
+
+@erikstmartin
+
+* Overview
+- Benchmarking
+- Profiling
+- Profiling Tips
+- Race Detector
+- Tracers
+- Performance Tips
+- Using pprof Over HTTP
+- Monitoring
+- Live Code
+
+* Writing Benchmarks
+
+Benchmarks are created in a similar way as tests
+
+  BenchmarkXxxx(b *testing.B)
+
+We then execute our testcase b.N times (this will vary in order to time reliably)
+
+  func BenchmarkDemo(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        fmt.Println("test")
+    }
+  }
+
+* Writing Benchmarks
+Often times we have some initialization that needs to take place that we'd like to exclude from our timing. For this we use *b.ResetTimer()*
+
+  func BenchmarkUserString(b *testing.B) {
+    u := createUser()
+
+    b.ResetTimer()
+    for i := 0; i < b.N; i++ {
+        fmt.Println(u.String())
+    }
+  }
+
+* Writing Benchmarks
+We can also use *b.StopTimer()* and *b.StartTimer()*
+
+  func BenchmarkUserString(b *testing.B) {
+    b.StopTimer()
+    u := createUser()
+    b.StartTimer()
+
+    for i := 0; i < b.N; i++ {
+        fmt.Println(u.String())
+    }
+  }
+
+* Running Benchmarks
+Benchmarks are run using *go*test* and passing a valid regular expression to the *-bench* flag.
+  
+  go test -bench=.
+
+We will see results in the format
+
+  BenchmarkDemo   1000000000               282 ns/op
+
+* Benchmarking Gotchas
+Don't use *b.N* as part of your benchmark. If you need a random number generate one. If your run time increases as *b.N* grows it can never converge on a value, causing your benchmark to run indefinitely.
+
+  func BenchmarkFactorial(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        factorial(b.N)
+    }
+  }
+Assign values returned by your function so the compiler does not optimize it away.
+
+  func BenchmarkFactorial(b *testing.B) {
+    var f int
+
+    for i := 0; i < b.N; i++ {
+        f = factorial(31)
+    }
+  }
+
+* Comparing Benchmarks
+benchmp can be used to compare and show differeneces between benchmark runs.
+
+  go get code.google.com/p/go.tools/cmd/benchcmp
+
+First we output the results of our benchmark runs
+
+  go test -bench=. > v1.benchmarks.txt
+  go test -bench=. > v2.benchmarks.txt
+
+Then we can pass these outputs to benchcmp.
+  
+  benchcmp v1.benchmarks.txt v2.benchmarks.txt
+
+  benchmark                   old ns/op     new ns/op     delta
+  BenchmarkLongFormRender     49436         45852         -7.25%
+
+* Profiling
+
+Profiling can be performed using the pprof tool.
+
+  go tool pprof
+
+*OS*X*
+
+Kernel Patch - Patches the OS X kernel to report accurate values
+[[http://godoc.org/code.google.com/p/rsc/cmd/pprof_mac_fix]]
+
+Dependencies - Install *ghostscript* and *graphviz*
+
+*Tips*
+
+- Use  --nodefraction=0.15 to tell pprof to ignore nodes that account for < 15% of the samples
+- Use gcflags="-s" to prevent the compiler from inlining methods.
+- Use gcflags="-m" to see more detailed information about what variables are being moved to the heap, what's being inlined etc.
+
+
+* CPU Profiler
+
+Generate a cpu profile, this will also output an executable file of our test suite to be used by pprof.
+
+  go test -gcflags="-s" -run=none -bench=SlowBench -cpuprofile=cpu.prof
+
+Now generate a pdf of the profile (text, svg, web, also supported).
+
+  go tool pprof -pdf app.test cpu.prof > cpu.pdf
+
+* CPU Profiler
+
+.image images/performance/cpuprof.png _ 768
+
+* Memory Profiler
+
+The memory profiler allows you to find where in your application your memory is being allocated.
+
+Generate a memory profile
+
+  go test -run=none -bench=SlowBench -memprofile=mem.prof
+
+Now generate a pdf of the profile.
+
+  go tool pprof -pdf app.test mem.prof > mem.pdf
+
+* Memory Profiler
+
+.image images/performance/memprof.png _ 1024
+
+* Block Profiler
+
+The block profiler allows you to find where your application spends its time blocking.
+
+Generate a block profile
+
+  go test -run=none -bench=SlowBench -blockprofile=block.prof
+
+Now generate a pdf of the profile.
+
+  go tool pprof -pdf app.test block.prof > block.pdf
+
+* Block Profiler
+
+.image images/performance/blockprof.png 500 _
+
+* Race Detector
+
+Be in the habit of running your tests with the *-race* flag. This will cause panics and give you a stack trace and explanation explaining where your data race was detected.
+
+  go test -race
+
+* Using pprof Over HTTP
+
+The net/http/pprof provides a mechanism to expose pprof data via http
+
+  import _ "net/http/pprof"
+
+You can then use the pprof tool against the running server
+  
+  # CPU profile (30s window)
+  go tool pprof http://localhost:8080/debug/pprof/profile
+
+  # Heap Profile
+  go tool pprof http://localhost:8080/debug/pprof/heap
+
+  # Blocking profile
+  go tool pprof http://localhost:8080/debug/pprof/block
+
+* Tracers
+
+Go provides an additional tool for profiling which are called tracers. These environment variables will output debug information as your application runs.
+
+- Garbage Collector Trace
+  GODEBUG=gctrace=1 ./app
+
+- Memory Allocator Trace
+  GODEBUG=allocfreetrace=1 ./app
+
+- Scheduler Trace
+  GODEBUG=schedtrace=1000 ./app
+
+
+
+* Additional Resources
+
+A great article on profiling and tracers can be found here:
+[[https://software.intel.com/en-us/blogs/2014/05/10/debugging-performance-issues-in-go-programs]]
+
+The Go blog also has a great article on profiling
+[[http://blog.golang.org/profiling-go-programs]]
+
+* Performance Tips
+
+- Reduce allocations - This reduces execution time as well as pressure on the GC for data allocated on the heap. Freelists are great for this. sync.Pool is a freelist available in the stdlib.
+- Preallocate Slices - If you know the typical size for a slice, preallocate it with a backing array of that size.
+- When switching between []byte and string try to stay with []byte as long as possible and convert to string at the end. These conversions will be free / cheaper in the future.
+- Use streams / io.Reader & io.Writer - Working with io.Reader & io.Writer can reduce allocation reading in an entire buffer.
+- Use json.Encoder - This will allow you to enc.Decode / enc.Encode an io.Reader and io.Writer respectively. It removes the need to have the entire document in memory.
+- Don't overruse pointers - If a variable escapes a function it will be moved to the heap, which adds pressure to the GC.
+
+
+* Performance Tips
+
+- Minimize channel usage - Synchronization can be expensive.
+- Minimize locks - These cause contention between resources waiting for the lock.
+- Use sync.RWMutex - Where appropriate this can reduce contention as many readers can hold the lock.
+
+* Monitoring
+
+The runtime package provides many useful methods for inspecting profiling data
+
+  runtime.ReadMemStats(m *MemStats)
+  runtime.GoroutineProfile(p []StackRecord) (n int, ok bool)
+  runtime.MemProfile(p []MemProfileRecord, inuseZero bool) (n int, ok bool)
+
+Richard Crowley has written a great package for collecting metrics and logging them to various sources at a specified interval. This package also contains methods to log memory and GC metrics.
+
+[[https://github.com/rcrowley/go-metrics]]
+
+* Live Code
