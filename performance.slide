@@ -196,6 +196,9 @@ Go provides an additional tool for profiling which are called tracers. These env
 - Garbage Collector Trace
   GODEBUG=gctrace=1 ./app
 
+Dave Cheney has written a tool for visualizing the output of the GC tracer: 
+[[http://dave.cheney.net/2014/07/11/visualising-the-go-garbage-collector]]
+
 - Memory Allocator Trace
   GODEBUG=allocfreetrace=1 ./app
 
