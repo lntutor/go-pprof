@@ -1,104 +1,113 @@
-Go Performance
+Golang Performance
+
 How to optimize your Go applications
-11 Jul 2014
+21 Feb 2016
+Tags: golang, performance, pprof, benkmarking
 
-Erik St. Martin
+Loi Nguyen
+Software Engineer, Chotot
+loinguyen@chotot.vn
+http://chotot.com
 
-@erikstmartin
-
-* Overview
+* Agenda
 - Benchmarking
 - Profiling
-- Profiling Tips
 - Race Detector
+- Using pprof Over HTTP
 - Tracers
 - Performance Tips
-- Using pprof Over HTTP
 - Monitoring
-- Live Code
 
-* Writing Benchmarks
+* Benchmarking
 
 Benchmarks are created in a similar way as tests
 
   BenchmarkXxxx(b *testing.B)
 
-We then execute our testcase b.N times (this will vary in order to time reliably)
-
-  func BenchmarkDemo(b *testing.B) {
-    for i := 0; i < b.N; i++ {
-        fmt.Println("test")
-    }
-  }
-
-* Writing Benchmarks
-Often times we have some initialization that needs to take place that we'd like to exclude from our timing. For this we use *b.ResetTimer()*
-
-  func BenchmarkUserString(b *testing.B) {
-    u := createUser()
-
-    b.ResetTimer()
-    for i := 0; i < b.N; i++ {
-        fmt.Println(u.String())
-    }
-  }
-
-* Writing Benchmarks
-We can also use *b.StopTimer()* and *b.StartTimer()*
-
-  func BenchmarkUserString(b *testing.B) {
-    b.StopTimer()
-    u := createUser()
-    b.StartTimer()
-
-    for i := 0; i < b.N; i++ {
-        fmt.Println(u.String())
-    }
-  }
-
-* Running Benchmarks
 Benchmarks are run using *go*test* and passing a valid regular expression to the *-bench* flag.
-  
+
   go test -bench=.
+
+
+* Benchmark 1 - Concat string
+.code /runtime/string/benchmark_test.go /^func BenchmarkConcat/,/^}/
+.code /runtime/string/benchmark_test.go /^func BenchmarkBuffer/,/^}/
 
 We will see results in the format
 
-  BenchmarkDemo   1000000000               282 ns/op
+  BenchmarkConcat-4   	 1000000	        106158 ns/op
+  BenchmarkBuffer-4   	100000000	        13.9 ns/op
 
-* Benchmarking Gotchas
-Don't use *b.N* as part of your benchmark. If you need a random number generate one. If your run time increases as *b.N* grows it can never converge on a value, causing your benchmark to run indefinitely.
+* Benchmark 1 - Concat string
+Tip:
 
-  func BenchmarkFactorial(b *testing.B) {
-    for i := 0; i < b.N; i++ {
-        factorial(b.N)
-    }
-  }
-Assign values returned by your function so the compiler does not optimize it away.
-
-  func BenchmarkFactorial(b *testing.B) {
-    var f int
-
-    for i := 0; i < b.N; i++ {
-        f = factorial(31)
-    }
-  }
+- Use bytes.Buffer to concat string
 
 * Comparing Benchmarks
 benchmp can be used to compare and show differeneces between benchmark runs.
 
-  go get code.google.com/p/go.tools/cmd/benchcmp
+  go get golang.org/x/tools/cmd/benchcmp
 
 First we output the results of our benchmark runs
 
-  go test -bench=. > v1.benchmarks.txt
-  go test -bench=. > v2.benchmarks.txt
+  go test -bench=. > old.txt
+  go test -bench=. > new.txt
 
 Then we can pass these outputs to benchcmp.
-  
-  benchcmp v1.benchmarks.txt v2.benchmarks.txt
 
-  benchmark                   old ns/op     new ns/op     delta
-  BenchmarkLongFormRender     49436         45852         -7.25%
+  benchcmp old.txt new.txt
+
+Output.
+
+  benchmark             old ns/op     new ns/op     delta
+  BenchmarkConcat-4     83038         97497         +17.41%
+  BenchmarkBuffer-4     15.6          13.8          -11.54%
+
+
+* Benchmark 2 - Sieve of Eratosthenes
+
+Let's write a program of Sieve of Eratosthenes.
+
+.image images/sieve.gif _ 600
+
+
+* Benchmark 2 - Sieve of Eratosthenes
+
+Example N = 10:
+Return array:
+
+    0: false
+    1: false
+    2: true
+    3: true
+    4: false
+    5: true
+    6: false
+    7: true
+    8: false
+    9: false
+
+* Benchmark 2 - Sieve of Eratosthenes
+
+Which option is better?
+
+Wide protected region:
+
+.play runtime/mutex/prime.go /WIDE/,/Unlock/
+
+Narrow protected region:
+
+.play runtime/mutex/prime.go /NARROW/,/}/
+
+* Benchmark 2 - Sieve of Eratosthenes
+  go test -bench=.
+
+.image images/narrow_vs_wide.png _ 800
+
+* Benchmark 1 - Sieve of Eratosthenes
+Tip:
+
+- Use narrow lock over wide lock
 
 * Profiling
 
@@ -124,11 +133,11 @@ Dependencies - Install *ghostscript* and *graphviz*
 
 Generate a cpu profile, this will also output an executable file of our test suite to be used by pprof.
 
-  go test -gcflags="-s" -run=none -bench=SlowBench -cpuprofile=cpu.prof
+  go test -gcflags="-m" -run=none -bench=BenchmarkConcat -cpuprofile=cpu.prof
 
 Now generate a pdf of the profile (text, svg, web, also supported).
 
-  go tool pprof -pdf app.test cpu.prof > cpu.pdf
+  go tool pprof -pdf cpu.prof > cpu.pdf
 
 * CPU Profiler
 
@@ -140,11 +149,11 @@ The memory profiler allows you to find where in your application your memory is 
 
 Generate a memory profile
 
-  go test -run=none -bench=SlowBench -memprofile=mem.prof
+  go test -run=none -bench=BenchmarkConcat -memprofile=mem.prof
 
 Now generate a pdf of the profile.
 
-  go tool pprof -pdf app.test mem.prof > mem.pdf
+  go tool pprof -pdf mem.prof > mem.pdf
 
 * Memory Profiler
 
@@ -156,11 +165,11 @@ The block profiler allows you to find where your application spends its time blo
 
 Generate a block profile
 
-  go test -run=none -bench=SlowBench -blockprofile=block.prof
+  go test -run=none -bench=BenchmarkConcat -blockprofile=block.prof
 
 Now generate a pdf of the profile.
 
-  go tool pprof -pdf app.test block.prof > block.pdf
+  go tool pprof -pdf block.prof > block.pdf
 
 * Block Profiler
 
@@ -172,6 +181,9 @@ Be in the habit of running your tests with the *-race* flag. This will cause pan
 
   go test -race
 
+.play runtime/mutex/prime.go /RACE/,/}/
+.image images/race_detector.png _ 800
+
 * Using pprof Over HTTP
 
 The net/http/pprof provides a mechanism to expose pprof data via http
@@ -179,7 +191,7 @@ The net/http/pprof provides a mechanism to expose pprof data via http
   import _ "net/http/pprof"
 
 You can then use the pprof tool against the running server
-  
+
   # CPU profile (30s window)
   go tool pprof http://localhost:8080/debug/pprof/profile
 
@@ -196,7 +208,7 @@ Go provides an additional tool for profiling which are called tracers. These env
 - Garbage Collector Trace
   GODEBUG=gctrace=1 ./app
 
-Dave Cheney has written a tool for visualizing the output of the GC tracer: 
+Dave Cheney has written a tool for visualizing the output of the GC tracer:
 [[http://dave.cheney.net/2014/07/11/visualising-the-go-garbage-collector]]
 
 - Memory Allocator Trace
@@ -205,15 +217,11 @@ Dave Cheney has written a tool for visualizing the output of the GC tracer:
 - Scheduler Trace
   GODEBUG=schedtrace=1000 ./app
 
+* Tracers Visualize
+  go get -u -v github.com/davecheney/gcvis
+  GODEBUG=gctrace=1 gcvis ./app
 
-
-* Additional Resources
-
-A great article on profiling and tracers can be found here:
-[[https://software.intel.com/en-us/blogs/2014/05/10/debugging-performance-issues-in-go-programs]]
-
-The Go blog also has a great article on profiling
-[[http://blog.golang.org/profiling-go-programs]]
+.image images/gvis.png _ 1000
 
 * Performance Tips
 
@@ -229,18 +237,15 @@ The Go blog also has a great article on profiling
 
 - Minimize channel usage - Synchronization can be expensive.
 - Minimize locks - These cause contention between resources waiting for the lock.
-- Use sync.RWMutex - Where appropriate this can reduce contention as many readers can hold the lock.
 
-* Monitoring
 
-The runtime package provides many useful methods for inspecting profiling data
+* Additional Resources
 
-  runtime.ReadMemStats(m *MemStats)
-  runtime.GoroutineProfile(p []StackRecord) (n int, ok bool)
-  runtime.MemProfile(p []MemProfileRecord, inuseZero bool) (n int, ok bool)
+A great article on profiling and tracers can be found here:
+[[https://software.intel.com/en-us/blogs/2014/05/10/debugging-performance-issues-in-go-programs]]
 
-Richard Crowley has written a great package for collecting metrics and logging them to various sources at a specified interval. This package also contains methods to log memory and GC metrics.
+The Go blog also has a great article on profiling
+[[http://blog.golang.org/profiling-go-programs]]
 
-[[https://github.com/rcrowley/go-metrics]]
-
-* Live Code
+Go performance
+[[https://github.com/erikstmartin/go-performance]]
